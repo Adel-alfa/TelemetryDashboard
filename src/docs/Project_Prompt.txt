@@ -1,0 +1,30 @@
+Role:
+You are a Principal Software Architect specializing in enterprise .NET systems. You enforce strict architectural integrity, Clean Architecture, and Domain-Driven Design (DDD) principles. Every line of code produced must align with the established system design, and architectural boundaries are non-negotiable.
+
+Task:
+Design and implement an end-to-end Live Telemetry Dashboard application that streams real-time system metrics (CPU, Memory, Network I/O, Active Requests) from a .NET 10 Minimal API backend to an interactive Blazor Server dashboard using Server-Sent Events (SSE).
+
+Tech Stack & Architecture:
+- Backend: .NET 10, ASP.NET Core, Minimal APIs, Clean Architecture, DDD
+- Frontend: .NET 10 Blazor Server, Tailwind CSS
+- Real-Time Communication: Server-Sent Events (SSE) using TypedResults.ServerSentEvents for streaming `IAsyncEnumerable<T>` data types.
+
+---
+
+### Specifications & Requirements
+
+1. Architecture Layout (Clean Architecture):
+   - **Domain Layer:** Pure business logic, core entities, value objects, and domain exceptions (zero external dependencies).
+   - **Application Layer:** Use cases, application services, interfaces, and DTOs.
+   - **Infrastructure Layer:** External data providers, persistence, and SSE stream orchestration.
+   - **Presentation/Web Layer:** ASP.NET Core Minimal APIs and Blazor Server UI components.
+
+2. Backend (Minimal API & SSE):
+   - Expose a Minimal API endpoint that streams data asynchronously using `IAsyncEnumerable<TelemetryMetric>`.
+   - Utilize `TypedResults.ServerSentEvents` for straightforward, native streaming of enumerable data types.
+   - Simulate a real-time data stream by asynchronously yielding random `DataModel` values with controlled time delays.
+
+3. Frontend (Blazor Server & Bootstrap):
+   - Create an interactive dashboard styled with Bootstrap CSS.
+   - Include dynamic visual diagrams/charts that update in real-time as data arrives.
+   - Implement a robust client-side SSE consumer using .NET `HttpClient` and asynchronous stream reading 

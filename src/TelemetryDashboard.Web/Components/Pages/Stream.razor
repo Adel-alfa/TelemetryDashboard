@@ -1,0 +1,239 @@
+﻿@page "/stream"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Globalization
+@using TelemetryDashboard.Application
+@inject ITelemetryStream TelemetryStream
+
+<PageTitle>Live Telemetry | Signal Desk</PageTitle>
+
+<div class="dashboard container-fluid">
+	<header class="dashboard-header">
+		<div>
+			<p class="eyebrow">OPERATIONS / SYSTEM HEALTH</p>
+			<h1>Live telemetry</h1>
+			<p class="header-subtitle">Production node <span class="node-name">edge-node-01</span></p>
+		</div>
+		<div class="stream-state" aria-live="polite">			
+			<span class="state-light @(_connected ? "is-live" : "")"></span>
+			<span>@_connectionState</span>
+			@if (_latest is not null)
+			{
+				<span class="state-time">Updated @_latest.CapturedAt.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)</span>
+			}
+		</div>
+	</header>
+
+	@if (!string.IsNullOrWhiteSpace(_streamError))
+	{
+		<div class="stream-notice" role="status">@_streamError</div>
+	}
+
+	<section class="metric-grid" aria-label="Current system metrics">
+		<article class="metric-panel cpu-panel">
+			<div class="metric-heading"><span>CPU UTILIZATION</span><span class="metric-glyph">C</span></div>
+			<div class="metric-reading">@(_latest is null ? "--" : _latest.CpuPercent.ToString("0.0", CultureInfo.InvariantCulture))<span class="metric-unit">%</span></div>
+			<div class="meter-track"><span style="width: @CpuWidth"></span></div>
+			<div class="metric-foot"><span>Processor load</span><span>0–100%</span></div>
+		</article>
+
+		<article class="metric-panel memory-panel">
+			<div class="metric-heading"><span>MEMORY</span><span class="metric-glyph">M</span></div>
+			<div class="metric-reading">@(_latest is null ? "--" : _latest.Memory.UsagePercent.ToString("0.0", CultureInfo.InvariantCulture))<span class="metric-unit">%</span></div>
+			<div class="meter-track"><span style="width: @MemoryWidth"></span></div>
+			<div class="metric-foot">
+				<span>@(_latest is null ? "Waiting for sample" : $"{FormatBytes(_latest.Memory.UsedBytes)} used")</span>
+				<span>@(_latest is null ? "" : $"of {FormatBytes(_latest.Memory.TotalBytes)}")</span>
+			</div>
+		</article>
+
+		<article class="metric-panel requests-panel">
+			<div class="metric-heading"><span>ACTIVE REQUESTS</span><span class="metric-glyph">R</span></div>
+			<div class="metric-reading">@(_latest?.ActiveRequests.ToString("N0", CultureInfo.InvariantCulture) ?? "--")</div>
+			<div class="request-indicator"><span></span><span>Requests in flight</span></div>
+			<div class="metric-foot"><span>Current concurrency</span><span>Live</span></div>
+		</article>
+	</section>
+
+	<section class="chart-grid" aria-label="Metric history">
+		<article class="chart-panel">
+			<div class="chart-heading">
+				<div><p class="eyebrow">PROCESSOR</p><h2>CPU over time</h2></div>
+				<span class="chart-current">@(_latest is null ? "--" : $"{_latest.CpuPercent:0.0}%")</span>
+			</div>
+			<div class="chart-wrap">
+				<div class="chart-guides"><span>100%</span><span>50%</span><span>0%</span></div>
+				<svg class="line-chart" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="CPU utilization history for recent samples">
+					<path class="chart-area cpu-area" d="@CpuArea"></path>
+					<path class="chart-line cpu-line" d="@CpuPath"></path>
+				</svg>
+			</div>
+			<div class="chart-axis"><span>Oldest sample</span><span>Latest</span></div>
+		</article>
+
+		<article class="chart-panel">
+			<div class="chart-heading">
+				<div><p class="eyebrow">NETWORK</p><h2>Throughput</h2></div>
+				<span class="chart-current">@(_latest is null ? "--" : FormatRate(_latest.Network.InboundBytesPerSecond + _latest.Network.OutboundBytesPerSecond))</span>
+			</div>
+			<div class="chart-wrap">
+				<div class="chart-guides"><span>@FormatRate(NetworkScale)</span><span>@FormatRate(NetworkScale / 2)</span><span>0</span></div>
+				<svg class="line-chart" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Inbound and outbound network history for recent samples">
+					<path class="chart-line inbound-line" d="@InboundPath"></path>
+					<path class="chart-line outbound-line" d="@OutboundPath"></path>
+				</svg>
+			</div>
+			<div class="chart-axis"><span><i class="legend-dot inbound-dot"></i>Inbound</span><span><i class="legend-dot outbound-dot"></i>Outbound</span></div>
+		</article>
+	</section>
+
+	<section class="latest-strip" aria-label="Latest sample details">
+		<div class="latest-title"><span class="latest-mark"></span><div><p class="eyebrow">LATEST SAMPLE</p><strong>@(_latest?.CapturedAt.ToLocalTime().ToString("MMM dd, yyyy · HH:mm:ss", CultureInfo.InvariantCulture) ?? "Waiting for first event")</strong></div></div>
+		<div class="latest-detail"><span>INBOUND</span><strong>@(_latest is null ? "--" : FormatRate(_latest.Network.InboundBytesPerSecond))</strong></div>
+		<div class="latest-detail"><span>OUTBOUND</span><strong>@(_latest is null ? "--" : FormatRate(_latest.Network.OutboundBytesPerSecond))</strong></div>
+		<div class="latest-detail"><span>SAMPLES BUFFERED</span><strong>@_history.Count</strong></div>
+	</section>
+</div>
+
+@code {
+	private const int HistoryLimit = 36;
+	private readonly CancellationTokenSource _lifetime = new();
+	private readonly List<TelemetryMetric> _history = [];
+	private TelemetryMetric? _latest;
+	private Task? _streamTask;
+	private bool _connected;
+	private string _connectionState = "Connecting";
+	private string? _streamError;
+
+	private string CpuWidth => $"{Math.Clamp((double)(_latest?.CpuPercent ?? 0), 0, 100).ToString("0.#", CultureInfo.InvariantCulture)}%";
+	private string MemoryWidth => $"{Math.Clamp(_latest?.Memory.UsagePercent ?? 0, 0, 100).ToString("0.#", CultureInfo.InvariantCulture)}%";
+	private double NetworkScale => Math.Max(1, _history.Count == 0
+		? 1
+		: _history.Max(metric => metric.Network.InboundBytesPerSecond + metric.Network.OutboundBytesPerSecond));
+	private string CpuPath => BuildPath(metric => (double)metric.CpuPercent, 100);
+	private string CpuArea => _history.Count < 2 ? string.Empty : $"{CpuPath} L 100 40 L 0 40 Z";
+	private string InboundPath => BuildPath(metric => metric.Network.InboundBytesPerSecond, NetworkScale);
+	private string OutboundPath => BuildPath(metric => metric.Network.OutboundBytesPerSecond, NetworkScale);
+
+	protected override void OnAfterRender(bool firstRender)
+	{
+		if (firstRender)
+		{
+			_streamTask = ConsumeStreamAsync(_lifetime.Token);
+		}
+	}
+	/// <summary>Consumes the in-process telemetry service directly using dependency injection through <see cref="ITelemetryStream"/>.</summary>
+	/// /// <param name="cancellationToken">The component lifetime token passed to asynchronous enumeration and retry delays.</param>
+	/// <returns>A task that completes when the component is disposed or its stream loop is canceled.</returns>
+	/// <remarks>
+	/// This path does not use <see cref="IHttpClientFactory"/> or HTTP/SSE framing. It enumerates the injected
+	/// service in-process, updates component state through the renderer dispatcher, and retries I/O failures
+	/// with exponential backoff capped at fifteen seconds.
+	/// </remarks>
+	private async Task ConsumeStreamAsync(CancellationToken cancellationToken)
+	{
+		var retryDelay = TimeSpan.FromSeconds(1);
+
+		while (!cancellationToken.IsCancellationRequested)
+		{
+			try
+			{
+				await SetConnectionStateAsync("Connecting", false, null);
+				var isConnected = false;
+
+				await foreach (var metric in TelemetryStream.ReadAsync(cancellationToken))
+				{
+					if (!isConnected)
+					{
+						await SetConnectionStateAsync("Live stream", true, null);
+						isConnected = true;
+						retryDelay = TimeSpan.FromSeconds(1);
+					}
+
+					await ReceiveMetricAsync(metric);
+				}
+
+				if (!cancellationToken.IsCancellationRequested)
+				{
+					await SetConnectionStateAsync("Reconnecting", false, "The stream ended. Reconnecting automatically.");
+				}
+			}
+			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+			{
+				break;
+			}
+			catch (IOException exception)
+			{
+				await SetConnectionStateAsync("Reconnecting", false, $"Stream unavailable: {exception.Message}");
+			}
+
+			await Task.Delay(retryDelay, cancellationToken);
+			retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 2, 15));
+		}
+	}
+
+	private Task ReceiveMetricAsync(TelemetryMetric metric) => InvokeAsync(() =>
+	{
+		_latest = metric;
+		_history.Add(metric);
+		if (_history.Count > HistoryLimit)
+		{
+			_history.RemoveAt(0);
+		}
+
+		_streamError = null;
+		StateHasChanged();
+	});
+
+	private Task SetConnectionStateAsync(string state, bool connected, string? error) => InvokeAsync(() =>
+	{
+		_connectionState = state;
+		_connected = connected;
+		_streamError = error;
+		StateHasChanged();
+	});
+
+	private string BuildPath(Func<TelemetryMetric, double> select, double maximum)
+	{
+		if (_history.Count < 2)
+		{
+			return string.Empty;
+		}
+
+		return string.Join(" ", _history.Select((metric, index) =>
+		{
+			var x = index * 100d / (_history.Count - 1);
+			var y = 38 - Math.Clamp(select(metric) / maximum, 0, 1) * 34;
+			return $"{(index == 0 ? "M" : "L")} {x.ToString("0.##", CultureInfo.InvariantCulture)} {y.ToString("0.##", CultureInfo.InvariantCulture)}";
+		}));
+	}
+
+	private static string FormatBytes(long bytes)
+	{
+		var gigabytes = bytes / 1024d / 1024d / 1024d;
+		return $"{gigabytes:0.0} GB";
+	}
+
+	private static string FormatRate(double bytesPerSecond)
+	{
+		var megabytes = bytesPerSecond / 1024d / 1024d;
+		return megabytes >= 1 ? $"{megabytes:0.0} MB/s" : $"{bytesPerSecond / 1024d:0} KB/s";
+	}
+
+	public async ValueTask DisposeAsync()
+	{
+		await _lifetime.CancelAsync();
+		if (_streamTask is not null)
+		{
+			try
+			{
+				await _streamTask;
+			}
+			catch (OperationCanceledException)
+			{
+			}
+		}
+
+		_lifetime.Dispose();
+	}
+}
