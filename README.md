@@ -126,8 +126,12 @@ The dashboard is fundamentally **unidirectional** — the server pushes telemetr
 🐙 [GitHub](https://github.com/Adel-alfa)  
 💼 [LinkedIn](https://linkedin.com/in/adel-hassan-ly)
 
----
 
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+🌐 **Total Visitors:**
+---
+![Visitors Count](https://komarev.com/ghpvc/?username=Adel-alfa&repo=TelemetryDashboard&color=blue)
